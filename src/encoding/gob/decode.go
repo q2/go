@@ -565,10 +565,16 @@ func (dec *Decoder) decodeMap(mtyp reflect.Type, state *decoderState, value refl
 	elemIsPtr := mtyp.Elem().Kind() == reflect.Ptr
 	keyInstr := &decInstr{keyOp, 0, nil, ovfl}
 	elemInstr := &decInstr{elemOp, 0, nil, ovfl}
+	keyP := reflect.New(mtyp.Key())
+	keyZ := reflect.Zero(mtyp.Key())
+	elemP := reflect.New(mtyp.Elem())
+	elemZ := reflect.Zero(mtyp.Elem())
 	for i := 0; i < n; i++ {
-		key := decodeIntoValue(state, keyOp, keyIsPtr, allocValue(mtyp.Key()), keyInstr)
-		elem := decodeIntoValue(state, elemOp, elemIsPtr, allocValue(mtyp.Elem()), elemInstr)
+		key := decodeIntoValue(state, keyOp, keyIsPtr, keyP.Elem(), keyInstr)
+		elem := decodeIntoValue(state, elemOp, elemIsPtr, elemP.Elem(), elemInstr)
 		value.SetMapIndex(key, elem)
+		keyP.Elem().Set(keyZ)
+		elemP.Elem().Set(elemZ)
 	}
 }
 
@@ -1032,6 +1038,8 @@ func (dec *Decoder) compatibleType(fr reflect.Type, fw typeId, inProgress map[re
 
 // typeString returns a human-readable description of the type identified by remoteId.
 func (dec *Decoder) typeString(remoteId typeId) string {
+	typeLock.Lock()
+	defer typeLock.Unlock()
 	if t := idToType[remoteId]; t != nil {
 		// globally known type.
 		return t.string()
@@ -1062,14 +1070,14 @@ func (dec *Decoder) compileSingle(remoteId typeId, ut *userTypeInfo) (engine *de
 }
 
 // compileIgnoreSingle compiles the decoder engine for a non-struct top-level value that will be discarded.
-func (dec *Decoder) compileIgnoreSingle(remoteId typeId) (engine *decEngine, err error) {
-	engine = new(decEngine)
+func (dec *Decoder) compileIgnoreSingle(remoteId typeId) *decEngine {
+	engine := new(decEngine)
 	engine.instr = make([]decInstr, 1) // one item
 	op := dec.decIgnoreOpFor(remoteId, make(map[typeId]*decOp))
 	ovfl := overflow(dec.typeString(remoteId))
 	engine.instr[0] = decInstr{*op, 0, nil, ovfl}
 	engine.numInstr = 1
-	return
+	return engine
 }
 
 // compileDec compiles the decoder engine for a value. If the value is not a struct,
@@ -1160,7 +1168,7 @@ func (dec *Decoder) getIgnoreEnginePtr(wireId typeId) (enginePtr **decEngine, er
 		if wire != nil && wire.StructT != nil {
 			*enginePtr, err = dec.compileDec(wireId, userType(emptyStructType))
 		} else {
-			*enginePtr, err = dec.compileIgnoreSingle(wireId)
+			*enginePtr = dec.compileIgnoreSingle(wireId)
 		}
 		if err != nil {
 			delete(dec.ignorerCache, wireId)

@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"regexp"
@@ -169,15 +168,6 @@ func TestAcceptIgnoreSomeErrors(t *testing.T) {
 	}
 }
 
-func isWindowsXP(t *testing.T) bool {
-	v, err := syscall.GetVersion()
-	if err != nil {
-		t.Fatalf("GetVersion failed: %v", err)
-	}
-	major := byte(v)
-	return major < 6
-}
-
 func runCmd(args ...string) ([]byte, error) {
 	removeUTF8BOM := func(b []byte) []byte {
 		if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
@@ -185,7 +175,7 @@ func runCmd(args ...string) ([]byte, error) {
 		}
 		return b
 	}
-	f, err := ioutil.TempFile("", "netcmd")
+	f, err := os.CreateTemp("", "netcmd")
 	if err != nil {
 		return nil, err
 	}
@@ -198,7 +188,7 @@ func runCmd(args ...string) ([]byte, error) {
 			return nil, fmt.Errorf("%s failed: %v: %q", args[0], err, string(removeUTF8BOM(out)))
 		}
 		var err2 error
-		out, err2 = ioutil.ReadFile(f.Name())
+		out, err2 = os.ReadFile(f.Name())
 		if err2 != nil {
 			return nil, err2
 		}
@@ -207,7 +197,7 @@ func runCmd(args ...string) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("%s failed: %v", args[0], err)
 	}
-	out, err = ioutil.ReadFile(f.Name())
+	out, err = os.ReadFile(f.Name())
 	if err != nil {
 		return nil, err
 	}
@@ -266,9 +256,6 @@ func netshInterfaceIPShowInterface(ipver string, ifaces map[string]bool) error {
 }
 
 func TestInterfacesWithNetsh(t *testing.T) {
-	if isWindowsXP(t) {
-		t.Skip("Windows XP netsh command does not provide required functionality")
-	}
 	if !netshSpeaksEnglish(t) {
 		t.Skip("English version of netsh required for this test")
 	}
@@ -440,9 +427,6 @@ func netshInterfaceIPv6ShowAddress(name string, netshOutput []byte) []string {
 }
 
 func TestInterfaceAddrsWithNetsh(t *testing.T) {
-	if isWindowsXP(t) {
-		t.Skip("Windows XP netsh command does not provide required functionality")
-	}
 	if !netshSpeaksEnglish(t) {
 		t.Skip("English version of netsh required for this test")
 	}
@@ -519,9 +503,6 @@ func checkGetmac(t *testing.T) {
 }
 
 func TestInterfaceHardwareAddrWithGetmac(t *testing.T) {
-	if isWindowsXP(t) {
-		t.Skip("Windows XP does not have powershell command")
-	}
 	checkGetmac(t)
 
 	ift, err := Interfaces()
@@ -589,10 +570,10 @@ func TestInterfaceHardwareAddrWithGetmac(t *testing.T) {
 			// skip these
 			return
 		}
-		addr = strings.Replace(addr, "-", ":", -1)
+		addr = strings.ReplaceAll(addr, "-", ":")
 		cname := getValue("Connection Name")
 		want[cname] = addr
-		group = nil
+		group = make(map[string]string)
 	}
 	lines := bytes.Split(out, []byte{'\r', '\n'})
 	for _, line := range lines {
@@ -608,15 +589,34 @@ func TestInterfaceHardwareAddrWithGetmac(t *testing.T) {
 	}
 	processGroup()
 
+	dups := make(map[string][]string)
+	for name, addr := range want {
+		if _, ok := dups[addr]; !ok {
+			dups[addr] = make([]string, 0)
+		}
+		dups[addr] = append(dups[addr], name)
+	}
+
+nextWant:
 	for name, wantAddr := range want {
-		haveAddr, ok := have[name]
-		if !ok {
-			t.Errorf("getmac lists %q, but it could not be found among Go interfaces %v", name, have)
+		if haveAddr, ok := have[name]; ok {
+			if haveAddr != wantAddr {
+				t.Errorf("unexpected MAC address for %q - %v, want %v", name, haveAddr, wantAddr)
+			}
 			continue
 		}
-		if haveAddr != wantAddr {
-			t.Errorf("unexpected MAC address for %q - %v, want %v", name, haveAddr, wantAddr)
-			continue
+		// We could not find the interface in getmac output by name.
+		// But sometimes getmac lists many interface names
+		// for the same MAC address. If that is the case here,
+		// and we can match at least one of those names,
+		// let's ignore the other names.
+		if dupNames, ok := dups[wantAddr]; ok && len(dupNames) > 1 {
+			for _, dupName := range dupNames {
+				if haveAddr, ok := have[dupName]; ok && haveAddr == wantAddr {
+					continue nextWant
+				}
+			}
 		}
+		t.Errorf("getmac lists %q, but it could not be found among Go interfaces %v", name, have)
 	}
 }

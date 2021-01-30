@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
@@ -55,6 +54,13 @@ func ExampleCmd_Output() {
 		log.Fatal(err)
 	}
 	fmt.Printf("The date is %s\n", out)
+}
+
+func ExampleCmd_Run() {
+	cmd := exec.Command("sleep", "1")
+	log.Printf("Running command and waiting for it to finish...")
+	err := cmd.Run()
+	log.Printf("Command finished with error: %v", err)
 }
 
 func ExampleCmd_Start() {
@@ -121,7 +127,7 @@ func ExampleCmd_StderrPipe() {
 		log.Fatal(err)
 	}
 
-	slurp, _ := ioutil.ReadAll(stderr)
+	slurp, _ := io.ReadAll(stderr)
 	fmt.Printf("%s\n", slurp)
 
 	if err := cmd.Wait(); err != nil {
